@@ -1,0 +1,98 @@
+@name E2 Ops Lister
+@persist E:wirelink Sorted:table Delay
+
+if (first()) {
+    E = entity():isWeldedTo():wirelink()
+    E:egpClear()
+    E:egpTextLayout(1,"",vec2(4,4),vec2(512,512))
+    E:egpFont(1,"Lucida Console")
+    E:egpSize(1,12)
+    
+    timer("Update",1000)
+    
+    Sorted = table()
+    
+    function table:sortInsert(V:entity,OPS) {
+        for(I=1,This:count()) {
+            local A = This[I,array]
+            if (A[2,number] < OPS) {
+                This:insertArray(I,array(V,OPS))
+                return
+            }
+        }
+        
+        This:pushArray(array(V,OPS))
+    }
+    
+    function string formatNumber(N) {
+        local Mill = floor(N/1000000)
+        if (Mill > 0) {return floor(N/1000000,2) + "M"}
+        
+        local Thousand = floor(N/1000)
+        if (Thousand > 0) {return floor(N/1000,1) + "K"}
+        
+        return N+""
+    }
+    
+    Delay = 1000
+} elseif (clk("Update")) {
+    local N = findByClass("gmod_wire_expression2")
+    local E2s = findToArray()
+    
+    local Threshold = 0
+    if (N > 75) {Threshold = 50}
+    elseif (N > 50) {Threshold = 30}
+    elseif (N > 20) {Threshhold = 0}
+    
+    Sorted = table()
+    local NumWithZero = 0
+    
+    for(I=1,E2s:count()) {
+        local E2 = E2s[I,entity]
+        local OPS = E2:ops()
+        
+        if (OPS > Threshold) {
+            Sorted:sortInsert(E2,OPS)
+        } else {
+            NumWithZero++
+        }
+    }
+    
+    local Str = ""
+    
+    local Perfed = 0
+    
+    Str += "OPS (cpu time)   E2 owner              E2 name\n"
+    Str += "---------------------------------------------------------------\n"
+    
+    for(I=1,Sorted:count()) {
+        if (!perf()) {
+            Delay = clamp(Delay+1000,1000,6000)
+            Perfed = 1
+            break
+        }
+        local R = Sorted[I,array]
+        local E2 = R[1,entity]
+        local OPS = R[2,number]
+        
+        local S1 = formatNumber(OPS) + " ops (" + formatNumber(floor((E2:cpuUsage()*1000000))) + ")"
+        local S2 = E2:owner():name():sub(1,20)
+        local S3 = E2:getName():sub(1,24):replace("\n","")
+        
+        local S1 = S1 + " ":repeat(17-S1:length())
+        local S2 = S2 + " ":repeat(22-S2:length())
+        
+        Str += S1+S2+S3+"\n"        
+    }
+    
+    if (!Perfed) {
+        Delay = clamp(Delay-1000,1000,6000)
+    }
+    
+    if (NumWithZero>0) {
+        Str += "\n+ " + NumWithZero + " other E2s with <" + Threshhold + " ops"
+    }
+    E:egpTextLayout(1,Str,vec2(4,4),vec2(512,512))
+    
+    timer("Update",Delay)
+}
