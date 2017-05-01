@@ -1,0 +1,139 @@
+@name printers
+@inputs EGP:wirelink
+@persist E:wirelink
+@persist TotalMoney OldTotalMoney Per_Hour
+@persist Detailed Distance UpdateRate
+@persist NotifyMe NotifyHint
+
+if (first()|duped()) {
+    #Source: https://gist.github.com/Divran/4f4e2dd8022646c3d1b869238ea9b92f
+    #OPTIONS
+    
+    #Set Detailed to 1 to show each printer
+    #Set to 0 to only show the totals
+    Detailed = 1
+    
+    #How far away to find printers (centered on the E2)
+    Distance = 400
+    
+    #interval to update at
+    UpdateRate = 1000
+    
+    #set this to a number to have the e2 notify you once you have this much money total
+    #set to 0 to disable
+    #it will notify you once every UpdateRate, so make UpdateRate larger if it's too spammy for you
+    NotifyMe = 0
+    
+    #set to 1 to use hints to notify you (only works if NotifyMe is above 0)
+    #hint prints to the right side of the screen and makes a sound
+    #if 0, uses print instead, which prints to chat and doesn't make a sound
+    NotifyHint = 0
+    
+    #END OF OPTIONS
+    
+    if (!->EGP) {
+        E = entity():isWeldedTo():wirelink()
+    } else {
+        E = EGP
+    }
+    
+    E:egpClear()
+    E:egpTextLayout(1,"",vec2(4,4),vec2(512,512))
+    E:egpFont(1,"Lucida Console")
+    E:egpSize(1,12)
+    
+    #findIncludePlayerProps(owner())
+    #You can add other people here like this
+    #findIncludePlayerProps(findPlayerByName("Rawss"))
+    
+    timer("update",UpdateRate)
+    
+    function string niceprice(N) {
+        if (N > 1000000) {
+            return "$" + round(N/1000000,1) + "M"
+        }
+        
+        if (N > 1000) {
+            return "$" + round(N/1000,1) + "K"
+        }
+        
+        return "$" + round(N)
+    }
+} elseif (clk("update")) {
+    local Str = "Type                    #               $\n"
+    Str += "---------------------------------------------------------------\n"
+    
+    #findByClass("money_printer")
+    findInSphere(entity():pos(),Distance)
+    findClipToClass("money_printer")
+    local Printers = findToArray()
+    
+    TotalMoney = 0
+    
+    local PrintersSorted = table()
+    
+    for(I=1,Printers:count()) {
+        local E = Printers[I,entity]
+        
+        local Type = E:printerType()
+        local Money = E:printedMoney()
+        
+        if (PrintersSorted:exists(Type)) {
+            PrintersSorted[Type,vector2] = vec2(
+                PrintersSorted[Type,vector2]:x()+1,
+                PrintersSorted[Type,vector2]:y()+Money
+            )
+        } else {
+            PrintersSorted[Type,vector2] = vec2(1,Money)
+        }
+        
+        TotalMoney += Money
+    }
+    
+    if (Detailed != 0) {
+        foreach(K,V:vector2 = PrintersSorted) {
+            local Amount = V:x()
+            local Money = V:y()
+            
+            local S1 = K
+            local S2 = Amount + ""
+            local S3 = niceprice(Money)
+            
+            local S1 = S1 + " ":repeat(24-S1:length())
+            local S2 = S2 + " ":repeat(16-S2:length())
+            
+            Str += S1+S2+S3+"\n"
+        }
+        
+        Str += "---------------------------------------------------------------\n"
+    }
+    
+    local Diff = TotalMoney - OldTotalMoney
+    
+    Per_Hour = Per_Hour * 0.6 + Diff * 0.4
+    if (Per_Hour < 0) {Per_Hour = 0}
+    
+    
+    local S1 = ""+Printers:count()
+    local S2 = niceprice(TotalMoney)
+    
+    Str += "Total:                  " + S1 + " ":repeat(16-S1:length()) + S2
+    
+    Str += "\n\nPer minute: " + niceprice(Per_Hour*60)
+         + "\nPer hour: " + niceprice(Per_Hour*3600)
+    
+    E:egpSetText(1,Str)
+    
+    if (NotifyMe > 0 & TotalMoney > NotifyMe) {
+        if (NotifyHint) {
+            hint("You have " + S2 + " money available!",5)
+        } else {
+            print("You have " + S2 + " money available!")
+        }
+    }
+    
+    OldTotalMoney = TotalMoney
+    
+    timer("update",UpdateRate)
+}
+    
