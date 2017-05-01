@@ -1,0 +1,183 @@
+
+@name doors
+@persist [Doors DoorsToLoad]:array
+@persist [Whitelist Whitelist_Saved]:table
+@persist OpenedDoors:array DoorsLoadIndex
+
+@persist OpenTime MaxDistance HideChat [ChatPrefix OpenDoorKey]:string
+
+if (first()|duped()) {
+    #Source: https://gist.github.com/Divran/a63250caa9f8302c95e966a4f4153b58
+    
+    #OPTIONS
+    OpenTime = 5       #Time in seconds doors are open
+    MaxDistance = 200  #Max distance to open the doors from
+    ChatPrefix = "."   #duh
+    OpenDoorKey = "e"  #button to open doors
+    HideChat = 1       #set to 1 to hide your chat message when you type a chat command
+    #OPTIONS
+    
+    #[
+        Chat commands:
+        add <player>    #adds target player to whitelist
+        remove <player> #removes target player from whitelist
+        clear           #removes all players from whitelist
+        adddoor         #adds the door you are aiming at (you can also just left click with the fading door tool)
+        removedoor      #removes the door you are aiming at from the doors list
+        cleardoors      #removes all doors  from the doors list
+    ]#
+    
+}
+
+if (keyClk()) {
+    local Ply = keyClk()
+    local Key = keyClk(Ply)
+    local Pressed = keyClkPressed()
+    if (Key == 1) {
+        if (Pressed == OpenDoorKey) {
+            if (Ply:shootPos():distance(Ply:aimPos()) <= MaxDistance) {
+                local Door = Ply:aimEntity()
+                
+                if (Doors[Door:id(),vector] != vec()) {
+                    local WLK = Door:wirelink()
+                    
+                    WLK["Fade",number] = 1
+                    OpenedDoors:pushEntity(Door)
+                    Door["closeat",number] = curtime() + OpenTime
+                }
+            }
+        } elseif (Pressed == "mouse_left" & Ply == owner()) {
+            local Tool = owner():tool()
+            if (Tool == "byb_fading_doors") {
+                local Prop = owner():aimEntity()
+                if (Prop:owner() == owner() & Prop:type() == "prop_physics") {
+                    print("Added door '" + Prop:model() + "' at " + round(Prop:boxCenterW()) + ".")
+                    Doors[Prop:id(),vector] = entity():toLocal(Prop:boxCenterW())
+                }
+            }
+        }
+    }
+} elseif (clk("closedoors")) {
+    for(I=OpenedDoors:count(),1,-1) {
+        local E = OpenedDoors[I,entity]
+        local CloseAt = E["closeat",number]
+        
+        if (curtime() >= CloseAt) {
+            local WLK = E:wirelink()
+            WLK["Fade",number] = 0
+            OpenedDoors:remove(I)
+        }
+    }
+
+    timer("closedoors",1000)
+} elseif (chatClk(owner())) {
+    local Expl = lastSaid():explode(" ")
+    
+    if (Expl[1,string] == ChatPrefix + "add") {
+        if (HideChat) {hideChat(1)}
+        local Ply = findPlayerByName(Expl:concat(" ",2))
+        if (Ply) {
+            Whitelist[Ply:steamID(),entity] = Ply
+            print("Player '" + Ply:name() + "' added.")
+            timer("updateRunOnKeys",100)
+        } else {print("Invalid player specified!")}
+    } elseif (Expl[1,string] == ChatPrefix + "clear") {
+        if (HideChat) {hideChat(1)}
+        foreach(SteamID,Ply:entity = Whitelist) {runOnKeys(Ply,0)}
+        Whitelist = table()
+        print("Whitelist cleared")
+    } elseif (Expl[1,string] == ChatPrefix + "remove") {
+        if (HideChat) {hideChat(1)}
+        local Ply = findPlayerByName(Expl:concat(" ",2))
+        if (Ply) {
+            runOnKeys(Ply,0)
+            Whitelist:unset(Ply:steamID())
+            print("Player '" + Ply:name() + "' removed.")
+        } else {print("Invalid player specified!")}
+    } elseif (Expl[1,string] == ChatPrefix + "adddoor") {
+        if (HideChat) {hideChat(1)}
+        local Prop = owner():aimEntity()
+        if (Prop & Doors[Prop:id(),vector] == vec()) {
+            Doors[Prop:id(),vector] = entity():toLocal(Prop:boxCenterW())
+            print("Added door '" + Prop:model() + "' at " + round(Prop:boxCenterW()) + ".")
+        } else {print("Invalid door specified!")}
+    } elseif (Expl[1,string] == ChatPrefix + "removedoor") {
+        if (HideChat) {hideChat(1)}
+        local Prop = owner():aimEntity()
+        if (Prop & Doors[Prop:id(),vector] != vec()) {
+            Doors:unset(Prop:id())
+            print("Removed door '" + Prop:model() + "' at " + round(Prop:boxCenterW()) + ".")
+        } else {print("Invalid door specified!")}
+    } elseif (Expl[1,string] == ChatPrefix + "cleardoors") {
+        if (HideChat) {hideChat(1)}
+        Doors = array()
+        OpenedDoors = array()
+        print("All doors removed")
+    }
+} elseif (clk("updateRunOnKeys")) {
+    foreach(SteamID,Ply:entity = Whitelist) {runOnKeys(Ply,1)}
+    #Update every 10 sec in case someone leaves and reconnects
+    timer("updateRunOnKeys",10000)
+} elseif (first()) {
+    Doors = array()
+    Whitelist = table()
+    Whitelist[owner():steamID(),entity] = owner()
+    
+    OpenedDoors = array()
+    
+    runOnChat(1)
+    timer("updateRunOnKeys",1000)
+    timer("closedoors",1000)
+} elseif (dupefinished()) {
+    OpenedDoors = array()
+    DoorsToLoad = array()
+    DoorsLoadIndex = 0
+
+    #Load saved doors
+    local N = 0
+    foreach(DoorID,Pos:vector = Doors) {
+        DoorsToLoad:pushVector(Pos)
+        N++
+    }
+    
+    Doors = array()
+    
+    print("Loading " + N + " doors...")
+    timer("load_doors",100)
+} elseif (clk("load_doors")) {
+    DoorsLoadIndex++
+    local DoorPos = entity():toWorld(DoorsToLoad[DoorsLoadIndex,vector])
+    
+    local R = rangerOffset(DoorPos,DoorPos+vec(0,0,1))
+    local Door = R:entity()
+    if (Door) {
+        print("Added door '" + Door:model() + "' at " + round(Door:boxCenterW()) + ".")
+        Doors[Door:id(),vector] = entity():toLocal(Door:boxCenterW())
+    }
+    
+    if (DoorsLoadIndex < DoorsToLoad:count()) {
+        timer("load_doors",1000)
+    } else {
+        print("Doors loaded! Loading whitelist...")
+        timer("load_whitelist",1000)
+    }
+} elseif (clk("load_whitelist")) {
+    #Load saved whitelist
+    local SteamIDs = table()
+    local Plys = players()
+    for(I=1,Plys:count()) {
+        local P = Plys[I,entity]
+        SteamIDs[P:steamID(),entity] = P
+    }
+    
+    local N = 0
+    foreach(SteamID,Ply:entity = Whitelist) {
+        Whitelist[SteamID,entity] = SteamIDs[SteamID,entity]
+        N++
+    }
+    
+    print("Whitelist loaded! Added " + N + " players to whitelist")
+
+    timer("updateRunOnKeys",100)
+    timer("closedoors",1000)
+}
