@@ -1,0 +1,495 @@
+@name gunshop
+@inputs EGP:wirelink [BaseProp EGPUser WireUser]:entity SearchShipments MoneyPotStoredAmount
+@outputs MoneyPotOutputAmount
+@persist BaseProp:entity
+@persist Shipments:table ShipmentEntities:array
+@persist FindShipmentsInterval InsertedMoneyID GetChangeButtonID ScrollUpID ScrollDownID
+@persist OriginalUserPos:vector
+@persist MoneyPotCurrentAmount Scroll OldX
+@persist Rainbows TotalEarnings
+@persist AntiSpamCD TimeBetweenClicks ExtraSearchRadius
+@persist ChatPrefix:string BannedPlayers:table
+
+if (first()|duped()|dupefinished()) {
+    #Source: https://gist.github.com/Divran/ec50246f0ac5be650052a49682e29feb
+    #[
+        HOW TO USE
+        1.  BUILD:
+            Build some sort of contraption which has a
+            slope with super ice for guns to slide to the customer.
+            You know, the usual. Also make a space for the
+            money pot, of course. As well as some way of returning
+            the users change when they press the "get your change back" button.
+        
+        2.  SPAWN:
+            Spawn an EGP screen, placed anywhere.
+            Spawn a wire user, placed anywhere. Make sure the user is nocollided to everything.
+        
+        3.  WIRING INPUTS:
+            - Wire "EGP" to the EGP screen.
+            - Wire "BaseProp" to the "floor" of your gunshop
+                (generally the large prop which all of your
+                shipments are sitting on top of. See
+                "ExtraSearchRadius" below if you don't
+                have a big prop like this)
+            - Wire "EGPUser" to the EGP screen's user output
+            - Wire "WireUser" to the "Create entity" output of the wire user.
+            - Optionally wire "SearchShipments" to whatever you want.
+                This input causes the E2 to find nearby shipments.
+                I suggest you wire this to the output of your
+                fading door access hatch.
+            - Wire "MoneyPotStoredAmount" to the "Stored amount" output of the money pot.
+        
+        4. WIRING OUTPUTS:
+            - Wire "SpawnAmount" of the money pot to the "MoneyPotOutputAmount" output of this E2.
+        
+        5. Done.
+            The E2 will now automatically find nearby shipments
+            and it will teleport the wire user to the shipment that 
+            the user wants to buy.
+            It will notify you if a shipment is out of stock,
+            and it will tell you how much money you have earned so far.
+        
+        6. Configure some options down below.
+        
+        7. Chat commands
+            The chat prefix can be changed (default is dot ".")
+        
+            .ban <name>
+                Bans the person from using the gunshop (saved until e2 is respawned)
+            .unban <name>
+            .returnchange
+                The same as pressing the return change button on the screen
+            .outputmoney
+                Output all the money (same as pressing Use on the money pot)
+            .searchshipments
+                Scan for nearby shipments (same as triggering the SearchShipments input)
+    ]#
+    
+    # OPTIONS
+    ######################################
+    ChatPrefix = "."
+    
+    FindShipmentsInterval = 0 #in ms.
+                              #0 default
+                              #set to 0 to disable auto shipment search (use input for manual)
+
+    Rainbows = 0
+    
+    ExtraSearchRadius = 0 #Search radius is BaseProp:boxSize():length()*2+ExtraSearchRadius
+                          #By default, this number is 0 and is unecessary, but its usefulness
+                          #depends on how your shop is built
+    
+    TimeBetweenClicks = 1 #how much time must pass before user can click again (in seconds)
+    
+    #Cost of a single gun/etc from a shipment
+    function number shipmentCost(Name:string,PricePerUnit) {
+        #default: add 50% and ceil at nearest 100
+        return ceil(PricePerUnit*1.50,-2)
+        
+        #you can change this function to change the price
+        #for example if (Name == "name of gun") {return 1337}
+        #or whatever you want
+    }
+    
+    ######################################
+    # END OPTIONS
+    
+    function table entity:getShipmentInfo() {
+        if (This:isValid() & This:type() == "spawned_shipment") {
+            #Get all info
+            #The info we don't need is commented out  
+            return table(
+                "isShipment" = This:isShipment() & This:shipmentName() != "Air",
+                "amount" = This:shipmentAmount(),
+                "cost" = This:shipmentCost(),
+                "name" = This:shipmentName(),
+                "pricePerUnit" = This:shipmentPricePerUnit(),
+                "spawnAmount" = This:shipmentSpawnAmount(),
+                "shipmentEntity" = This
+                #"individualCost" = This:shipmentIndividualCost(),
+                #"model" = This:shipmentModel(),
+                #"id" = This:shipmentID(),
+                #"isEmpty" = This:isEmptyShipment(),
+                #"availableSeparately" = This:shipmentAvailableSeperately(),
+                #"class" = This:shipmentClass(),
+            )
+        } else {
+            return table("isShipment"=0)
+        }
+    }
+    
+    function insertShipment(Info:table,UserCost) {
+        for(I=1,Shipments:count()) {
+            local ThisUserCost = Shipments[I,table]["userCost",number]
+            if (UserCost > ThisUserCost) {
+                Shipments:insertTable(I,Info)
+                return
+            }
+        }
+        
+        Shipments:pushTable(Info)
+    }
+    
+    function pressShipment(I,S:table) {
+        if (curtime() < AntiSpamCD) {return}
+        AntiSpamCD = curtime() + TimeBetweenClicks
+        
+        local Current = floor(MoneyPotStoredAmount-MoneyPotCurrentAmount)
+        if (Current >= S["userCost",number] & S["amount",number] > 0) {
+            local E = S["shipmentEntity",entity]
+            WireUser:setPos(E:pos())
+            local WLK = WireUser:wirelink()
+            WLK["Fire",number] = 0
+            timer("checkMoney",100)
+            timer("activateuser",10)
+            MoneyPotCurrentAmount += ceil(S["userCost",number])
+            
+            local Amount = S["amount",number]
+            local SpawnAmount = S["spawnAmount",number]
+            if (E:isValid()) {
+                Amount = E:shipmentAmount()
+                SpawnAmount = E:shipmentSpawnAmount()
+            }
+            
+            S["spawnAmount",number] = SpawnAmount
+            S["amount",number] = Amount - 1
+            local EGPID = S["egpID",number]
+            local StockID = EGPID+3
+            EGP:egpSetText(StockID,"Stock: " + S["amount",number] + "/" + S["spawnAmount",number])
+            
+            local Earned = (S["userCost",number] - S["pricePerUnit",number])
+            TotalEarnings+=Earned
+            
+            print("[GunShop] " + EGPUser:name() + " bought a " + 
+                  S["name",string] + " for $" + 
+                  S["userCost",number] + ". You earned $" + 
+                  Earned + "! " +
+                  "Total earnings this session: $" + TotalEarnings )
+            
+            if (S["amount",number] == 0) {
+                print("[GunShop] " + S["name",string] + " is out of stock!")
+                EGP:egpRemove(EGPID)
+                EGP:egpRemove(EGPID+1)
+                EGP:egpRemove(EGPID+2)
+                EGP:egpRemove(EGPID+3)
+                Shipments:remove(I)
+                timer("findShipments",1500)
+            }
+        }
+    }
+    
+    EGP:egpClear()
+    
+    BannedPlayers = table()
+    OriginalUserPos = WireUser:pos()
+    MoneyPotCurrentAmount = MoneyPotStoredAmount
+    TotalEarnings = 0
+    Scroll = 0
+    OldX = 0
+    AntiSpamCD = 0
+    
+    runOnChat(1)
+    
+    timer("findShipments",100)
+    timer("checkMoney",100)
+} elseif (chatClk(owner())) {
+    local Msg = lastSaid():explode(" ")
+    if (Msg[1,string] == ChatPrefix + "ban") {
+        hideChat(1)
+        local Name = Msg:concat(" ",2)
+        local Ply = findPlayerByName(Name)
+        if (Ply) {
+            BannedPlayers[Ply:steamID64(),number] = 1
+            print("Player '" + Ply:name() + "' has been banned.")
+        } else {
+            print("Unable to find a player named '" + Name + "'.")
+        }
+    } elseif (Msg[1,string] == ChatPrefix + "unban") {
+        hideChat(1)
+        local Name = Msg:concat(" ",2)
+        local Ply = findPlayerByName(Name)
+        if (Ply) {
+            BannedPlayers:unset(Ply:steamID64())
+            print("Player '" + Ply:name() + "' has been unbanned.")
+        } else {
+            print("Unable to find a player named '" + Name + "'.")
+        }
+    } elseif (Msg[1,string] == ChatPrefix + "returnchange") {
+        hideChat(1)
+        MoneyPotOutputAmount = max(MoneyPotStoredAmount-MoneyPotCurrentAmount,0)
+        timer("checkMoney",100)
+        print("Outputting change.")
+    } elseif (Msg[1,string] == ChatPrefix + "outputmoney") {
+        MoneyPotOutputAmount = MoneyPotStoredAmount
+        timer("checkMoney",100)
+        print("Outputting all the money.")
+        hideChat(1)
+    } elseif (Msg[1,string] == ChatPrefix + "searchshipments") {
+        hideChat(1)
+        stoptimer("findShipments")
+        timer("findShipments",500)
+        print("Searching for shipments.")
+    }
+} elseif (~WireUser & WireUser) {
+    OriginalUserPos = WireUser:pos()
+} elseif (clk("removeBannedPopup")) {
+    EGP:egpRemove(OldX+1)
+    EGP:egpRemove(OldX+2)
+} elseif (~EGPUser & EGPUser) {
+    if (BannedPlayers[EGPUser:steamID64(),number] == 1) {
+        EGP:entity():soundPlay(1,0.5,"buttons/button11.wav")
+        local X = OldX+1
+        EGP:egpRoundedBox(X,vec2(256,256),vec2(500,32))
+        EGP:egpSize(X,8)
+        EGP:egpColor(X,vec(200,75,75))
+        X++
+        EGP:egpText(X,"You have been banned from this gunshop.",vec2(256,256))
+        EGP:egpSize(X,24)
+        EGP:egpColor(X,vec(255))
+        EGP:egpAlign(X,1,1)
+        timer("removeBannedPopup",4000)
+        exit()
+    }
+
+    local Cursor = EGP:egpCursor(EGPUser)
+
+    for(I=1,7) {
+        if (I+Scroll > Shipments:count()) {break}
+        local S = Shipments[I+Scroll,table]
+        local EGPID = S["egpID",number]
+        
+        local MinCorner = EGP:egpPos(EGPID) - EGP:egpSize(EGPID)/2
+        local MaxCorner = EGP:egpPos(EGPID) + EGP:egpSize(EGPID)/2
+        if (inrange(Cursor,MinCorner,MaxCorner)) {
+            pressShipment(I+Scroll,S)
+            exit()
+        }
+    }
+    
+    #Get change back
+    local MinCorner = EGP:egpPos(GetChangeButtonID) - EGP:egpSize(GetChangeButtonID)/2
+    local MaxCorner = EGP:egpPos(GetChangeButtonID) + EGP:egpSize(GetChangeButtonID)/2
+    if (inrange(Cursor,MinCorner,MaxCorner)) {
+        MoneyPotOutputAmount = max(MoneyPotStoredAmount-MoneyPotCurrentAmount,0)
+        timer("checkMoney",100)
+        exit()
+    }
+    
+    #Scroll up
+    local MinCorner = EGP:egpPos(ScrollUpID) - EGP:egpSize(ScrollUpID)/2
+    local MaxCorner = EGP:egpPos(ScrollUpID) + EGP:egpSize(ScrollUpID)/2
+    if (inrange(Cursor,MinCorner,MaxCorner)) {
+        Scroll -= 7
+        if (Scroll < 0) {Scroll = 0}
+        stoptimer("updateScreen")
+        timer("updateScreen",400)
+        exit()
+    }
+    #Scroll down
+    local MinCorner = EGP:egpPos(ScrollDownID) - EGP:egpSize(ScrollDownID)/2
+    local MaxCorner = EGP:egpPos(ScrollDownID) + EGP:egpSize(ScrollDownID)/2
+    if (inrange(Cursor,MinCorner,MaxCorner)) {
+        Scroll += 7
+        if (Scroll > Shipments:count()-7) {Scroll = Shipments:count()-7}
+        if (Scroll < 0) {Scroll = 0}
+        stoptimer("updateScreen")
+        timer("updateScreen",400)
+        exit()
+    }
+    
+} elseif (clk("activateuser")) {
+    local WLK = WireUser:wirelink()
+    WLK["Fire",number] = 1
+    timer("deactivateuser",10)
+} elseif (clk("deactivateuser")) {
+    local WLK = WireUser:wirelink()
+    WLK["Fire",number] = 0
+    WireUser:setPos(OriginalUserPos)
+} elseif (~MoneyPotStoredAmount|clk("checkMoney")) {
+    if (MoneyPotStoredAmount < MoneyPotCurrentAmount) {
+        MoneyPotCurrentAmount = MoneyPotStoredAmount
+    } else {
+        local CurrentAmount = floor(MoneyPotStoredAmount-MoneyPotCurrentAmount)
+    
+        for(I=1,7) {
+            if (I+Scroll > Shipments:count()) {break}
+            local S = Shipments[I+Scroll,table]
+            local UserCost = S["userCost",number]
+            local EGPID = S["egpID",number]
+            
+            if (CurrentAmount < UserCost) {
+                if (Rainbows) {
+                    EGP:egpColor(EGPID,hsv2rgb((I+Scroll)/Shipments:count()*360,1,1))
+                } else {
+                    EGP:egpColor(EGPID,vec(75))
+                }
+            } else {
+                EGP:egpColor(EGPID,vec(75,175,75))
+            }
+        }
+        
+        EGP:egpSetText(InsertedMoneyID,"Inserted money: $" + CurrentAmount)
+    }
+} elseif (~SearchShipments) {
+    stoptimer("findShipments")
+    timer("findShipments",500)
+} elseif (clk("findShipments")) {
+    findInSphere(BaseProp:pos(),BaseProp:boxSize():length()*2+ExtraSearchRadius)
+    findClipToClass("spawned_shipment")
+    ShipmentEntities = findToArray()
+    
+    #Clear shipments
+    Shipments = table()
+    
+    for(I=1,ShipmentEntities:count()) {
+        local E = ShipmentEntities[I,entity]
+        local Info = E:getShipmentInfo()
+        if (Info["isShipment",number] == 1 & Info["amount",number] > 0) {
+            local UserCost = shipmentCost(Info["name",string],Info["pricePerUnit",number])
+            Info["userCost",number] = UserCost
+            insertShipment(Info,UserCost)
+        }
+    }
+
+    #[
+    for(I=1,7) {
+        insertShipment(table("name"="Fake shipment",
+        "amount"=5,"userCost"=1337,"pricePerUnit"=900,"spawnAmount"=10),1337)
+    }
+    ]#
+    
+    if (FindShipmentsInterval > 0) {
+        timer("findShipments",FindShipmentsInterval)
+    }
+    timer("updateScreen",100)
+} elseif (clk("updateScreen")) {
+    #EGP:egpClear()
+    
+    local X = 1
+    EGP:egpText(X,"Divran's gunshop v1.2",vec2(512-16,6))
+    EGP:egpSize(X,14)
+    EGP:egpAlign(X,2,1)
+    EGP:egpColor(X,vec(255))
+    EGP:egpAngle(X,0)
+    
+    X++
+    EGP:egpText(X,"Inserted money: $0",vec2(10,18))
+    EGP:egpSize(X,28)
+    EGP:egpAlign(X,0,1)
+    EGP:egpColor(X,vec(255))
+    EGP:egpAngle(X,0)
+    InsertedMoneyID = X
+    
+    local BoxHeight = 54
+    local BoxWidth = 512-64
+    
+    for(I=1,7) {
+        if (I+Scroll > Shipments:count()) {break}
+        local S = Shipments[I+Scroll,table]
+        
+        local BoxPos = vec2(BoxWidth/2+8,10+I*(BoxHeight+4))
+        
+        X++
+        local Box = X
+        S["egpID",number] = Box
+        EGP:egpRoundedBox(X,BoxPos,vec2(BoxWidth,BoxHeight))
+        EGP:egpRadius(X,6)
+        if (Rainbows) {
+            EGP:egpColor(X,hsv2rgb((I+Scroll)/Shipments:count()*360,1,1))
+        } else {
+            EGP:egpColor(X,vec(75))
+        }
+        
+        X++
+        local Str = S["name",string]
+        EGP:egpText(X,Str,-vec2(BoxWidth/2-8,BoxHeight/2-16))
+        EGP:egpColor(X,vec(255))
+        EGP:egpAlign(X,0,1)
+        EGP:egpSize(X,28)
+        EGP:egpParent(X,Box)
+        EGP:egpAngle(X,0)
+        
+        X++
+        local Str = "$"+S["userCost",number]
+        EGP:egpText(X,Str,vec2(BoxWidth/2-8,-BoxHeight/2+16))
+        EGP:egpAlign(X,2,1)
+        EGP:egpSize(X,28)
+        EGP:egpColor(X,vec(255))
+        EGP:egpParent(X,Box)
+        EGP:egpAngle(X,0)
+        
+        X++
+        local Str = "Stock: " + S["amount",number] + "/" + S["spawnAmount",number]
+        EGP:egpText(X,Str,-vec2(BoxWidth/2-8,BoxHeight/2-40))
+        EGP:egpColor(X,vec(255))
+        EGP:egpAlign(X,0,1)
+        EGP:egpSize(X,18)
+        EGP:egpParent(X,Box)
+        EGP:egpAngle(X,0)
+    }
+    
+    X++
+    ScrollUpID = X
+    local ScrollerWidth = (512-BoxWidth)-20
+    local ScrollerPos = vec2(BoxWidth+ScrollerWidth/2+12,BoxHeight+14)
+    EGP:egpRoundedBox(X,ScrollerPos,vec2(ScrollerWidth,BoxHeight))
+    EGP:egpRadius(X,6)
+    EGP:egpColor(X,vec(75))
+    X++
+    EGP:egpTriangle(X,vec2(0,-BoxHeight/2+16),
+                      vec2(ScrollerWidth/2-8,BoxHeight/2-16),
+                      vec2(-ScrollerWidth/2+8,BoxHeight/2-16))
+    EGP:egpParent(X,X-1)
+    EGP:egpColor(X,vec(25))
+    
+    X++
+    ScrollDownID = X
+    local ScrollerWidth = (512-BoxWidth)-20
+    local ScrollerPos = vec2(BoxWidth+ScrollerWidth/2+12,512-BoxHeight+16)
+    EGP:egpRoundedBox(X,ScrollerPos,vec2(ScrollerWidth,BoxHeight))
+    EGP:egpRadius(X,6)
+    EGP:egpColor(X,vec(75))
+    X++
+    EGP:egpTriangle(X,vec2(0,BoxHeight/2-16),
+                      vec2(ScrollerWidth/2-8,-BoxHeight/2+16),
+                      vec2(-ScrollerWidth/2+8,-BoxHeight/2+16))
+    EGP:egpParent(X,X-1)
+    EGP:egpColor(X,vec(25))
+    
+    X++
+    GetChangeButtonID = X
+    EGP:egpRoundedBox(X,vec2(BoxWidth/2+8,10+8*(BoxHeight+4)),vec2(BoxWidth,BoxHeight))
+    EGP:egpRadius(X,6)
+    EGP:egpColor(X,vec(75))
+    X++
+    EGP:egpText(X,"Get your change back",vec2(0,0))
+    EGP:egpAlign(X,1,1)
+    EGP:egpColor(X,vec(255))
+    EGP:egpSize(X,28)
+    EGP:egpParent(X,X-1)
+    EGP:egpAngle(X,0)
+    
+    X++
+    ScrollInfoID = X
+    local Str = "Viewing " + Scroll + "-" + min(Scroll+7,Scroll+Shipments:count()) + " of " + Shipments:count()
+    EGP:egpText(X,Str,vec2(512-40,256))
+    EGP:egpAngle(X,-90)
+    EGP:egpSize(X,28)
+    EGP:egpColor(X,vec(255))
+    EGP:egpAlign(X,1,2)
+    
+    #Cursor
+    X++
+    EGP:egpTriangle(X,vec2(0,0),vec2(10,4),vec2(4,10))
+    EGP:egpParentToCursor(X)
+    EGP:egpColor(X,vec(175,110,110))
+    
+    for(I=X+1,OldX) {
+        EGP:egpRemove(I)
+    }
+    
+    OldX = X
+    
+    timer("checkMoney",10)
+}
